@@ -7,15 +7,27 @@ Runs each download in a separate process so it survives page close.
 import asyncio
 import aiohttp
 import os
+import sys
 import time
 import multiprocessing
 import traceback
 import functools
-from multiprocessing import Process, Value, Event
 from ctypes import c_double, c_longlong, c_int
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict
+
+# Use 'forkserver' on Linux/Mac to avoid fork-in-thread deadlocks when
+# process.start() is called from inside the asyncio event loop or a thread
+# pool executor.  'forkserver' spawns a dedicated helper process that does
+# the actual fork, so the uvicorn worker thread is never blocked waiting for
+# a fork() syscall to complete.
+# On Windows 'forkserver' is not available; fall back to 'spawn'.
+_MP_CTX_NAME = "forkserver" if sys.platform != "win32" else "spawn"
+_ctx = multiprocessing.get_context(_MP_CTX_NAME)
+Process = _ctx.Process
+Value   = _ctx.Value
+Event   = _ctx.Event
 
 
 @dataclass
