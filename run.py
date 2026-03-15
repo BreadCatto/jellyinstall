@@ -15,6 +15,7 @@ def main():
         port=int(os.environ.get("PORT", 8097)),
         reload=False,
         log_level="info",
+        timeout_keep_alive=5,
     )
 
 
