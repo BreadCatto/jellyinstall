@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     print("Shutting down - killing active downloads...")
-    download_manager.kill_all()
+    await download_manager.kill_all()
     await tmdb_service.close_session()
     await stream_service.close_session()
     print("Shutdown complete")

@@ -10,6 +10,7 @@ import os
 import time
 import multiprocessing
 import traceback
+import functools
 from multiprocessing import Process, Value, Event
 from ctypes import c_double, c_longlong, c_int
 from pathlib import Path
@@ -237,7 +238,7 @@ class DownloadManager:
         self.tasks: Dict[int, DownloadTask] = {}
         self._next_id = 1
 
-    def start_download(
+    def _start_download_sync(
         self,
         download_id: int,
         url: str,
@@ -247,6 +248,7 @@ class DownloadManager:
         media_type: str = "movie",
         quality: str = "",
     ) -> DownloadTask:
+        """Synchronous process spawn -- called from a thread pool."""
         total_size = Value(c_longlong, 0)
         downloaded = Value(c_longlong, 0)
         speed = Value(c_double, 0.0)
@@ -278,7 +280,36 @@ class DownloadManager:
         process.start()
         return task
 
-    def cancel_download(self, download_id: int) -> bool:
+    async def start_download(
+        self,
+        download_id: int,
+        url: str,
+        filepath: str,
+        title: str,
+        filename: str,
+        media_type: str = "movie",
+        quality: str = "",
+    ) -> DownloadTask:
+        """Non-blocking download start. Spawns the process in a thread pool
+        so the asyncio event loop is never blocked."""
+        loop = asyncio.get_running_loop()
+        task = await loop.run_in_executor(
+            None,
+            functools.partial(
+                self._start_download_sync,
+                download_id=download_id,
+                url=url,
+                filepath=filepath,
+                title=title,
+                filename=filename,
+                media_type=media_type,
+                quality=quality,
+            ),
+        )
+        return task
+
+    def _cancel_download_sync(self, download_id: int) -> bool:
+        """Synchronous cancel -- called from a thread pool."""
         task = self.tasks.get(download_id)
         if task is None:
             return False
@@ -287,6 +318,11 @@ class DownloadManager:
         if task.process.is_alive():
             task.process.terminate()
         return True
+
+    async def cancel_download(self, download_id: int) -> bool:
+        """Non-blocking cancel. Runs join/terminate in a thread pool."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._cancel_download_sync, download_id)
 
     def get_task_info(self, task: DownloadTask) -> dict:
         status_map = {0: "pending", 1: "downloading", 2: "completed", 3: "failed", 4: "cancelled"}
@@ -331,8 +367,8 @@ class DownloadManager:
         for did in to_remove:
             del self.tasks[did]
 
-    def kill_all(self):
-        """Kill all active download processes. Called on shutdown."""
+    def _kill_all_sync(self):
+        """Synchronous kill all -- called from a thread pool."""
         for task in self.tasks.values():
             task.cancel_event.set()
             if task.process.is_alive():
@@ -342,6 +378,11 @@ class DownloadManager:
             if task.process.is_alive():
                 task.process.kill()
         self.tasks.clear()
+
+    async def kill_all(self):
+        """Non-blocking kill all. Runs in a thread pool."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._kill_all_sync)
 
 
 # Singleton
