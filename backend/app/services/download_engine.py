@@ -28,6 +28,8 @@ class DownloadTask:
     media_type: str = "movie"
     quality: str = ""
     _read_task: asyncio.Task | None = None
+    _stderr_task: asyncio.Task | None = None
+    _bg_task: asyncio.Task | None = None
 
 NUM_CONNECTIONS = 20
 
@@ -68,7 +70,7 @@ class DownloadManager:
         self.tasks[download_id] = task
         
         # Start the task asynchronously
-        asyncio.create_task(self._start_process(task))
+        task._bg_task = asyncio.create_task(self._start_process(task))
         return task
 
     async def _start_process(self, task: DownloadTask):
@@ -85,9 +87,19 @@ class DownloadManager:
             )
             task.process = process
             task._read_task = asyncio.create_task(self._read_stdout(task, process))
+            task._stderr_task = asyncio.create_task(self._read_stderr(task, process))
         except Exception as e:
             print(f"Failed to start download process: {e}")
             task.status = 3
+
+    async def _read_stderr(self, task: DownloadTask, process: asyncio.subprocess.Process):
+        while True:
+            if not process.stderr:
+                break
+            line = await process.stderr.readline()
+            if not line:
+                break
+            print(f"[Worker Error {task.download_id}]: {line.decode('utf-8', errors='replace').strip()}", file=sys.stderr)
 
     async def _read_stdout(self, task: DownloadTask, process: asyncio.subprocess.Process):
         while True:

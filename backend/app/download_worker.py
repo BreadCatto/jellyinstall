@@ -78,8 +78,9 @@ async def _run_download(url: str, filepath: str, num_connections: int):
             async with session.head(url, allow_redirects=True) as resp:
                 content_length = int(resp.headers.get("Content-Length", 0))
                 accept_ranges = resp.headers.get("Accept-Ranges", "none")
-        except Exception:
+        except Exception as e:
             # Try GET with range to detect support
+            sys.stderr.write(f"HEAD request failed: {e}\n")
             try:
                 async with session.get(url, headers={"Range": "bytes=0-0"}, allow_redirects=True) as resp:
                     if resp.status == 206:
@@ -93,7 +94,8 @@ async def _run_download(url: str, filepath: str, num_connections: int):
                     else:
                         content_length = int(resp.headers.get("Content-Length", 0))
                         accept_ranges = "none"
-            except Exception:
+            except Exception as e:
+                sys.stderr.write(f"GET range request failed: {e}\n")
                 current_status = 3  # failed
                 report_progress()
                 return
@@ -172,6 +174,7 @@ async def _run_download(url: str, filepath: str, num_connections: int):
         report_progress()
 
 def main():
+    global current_status
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True)
     parser.add_argument("--filepath", required=True)
@@ -185,14 +188,12 @@ def main():
         asyncio.run(_run_download(args.url, args.filepath, args.connections))
     except KeyboardInterrupt:
         # Expected on cancellation
-        global current_status
         current_status = 4 # cancelled
         report_progress()
         sys.exit(0)
     except Exception as e:
         sys.stderr.write(f"Exception: {e}\n")
         traceback.print_exc(file=sys.stderr)
-        global current_status
         current_status = 3 # failed
         report_progress()
         sys.exit(1)
