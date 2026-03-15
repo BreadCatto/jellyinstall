@@ -137,7 +137,21 @@ async def _run_download(
     connector = aiohttp.TCPConnector(limit=num_connections + 10, force_close=False)
     timeout = aiohttp.ClientTimeout(total=None, connect=30)
 
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+    # Mimic a real browser so CDN/debrid servers don't fingerprint us as a
+    # bot and apply their default ~10 MB/s rate-limit tier.
+    default_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "identity",   # disable gzip so Content-Length is exact
+        "Connection": "keep-alive",
+    }
+
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=default_headers) as session:
         # Get file size with HEAD request
         try:
             async with session.head(url, allow_redirects=True) as resp:
