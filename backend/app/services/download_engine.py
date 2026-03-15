@@ -48,7 +48,9 @@ class DownloadTask:
 
 NUM_CONNECTIONS = 20
 CHUNK_READ_SIZE = 1024 * 1024       # 1 MB per iter_chunked read (was 64 KB)
-LOCK_UPDATE_INTERVAL = 4 * 1024 * 1024  # update shared counter every 4 MB accumulated
+LOCK_UPDATE_INTERVAL = 256 * 1024   # update shared counter every 256 KB accumulated
+                                    # fine-grained enough for smooth speed display at
+                                    # 100+ MB/s while still batching ~4 reads per lock
 
 
 def _format_speed(bps: float) -> str:
