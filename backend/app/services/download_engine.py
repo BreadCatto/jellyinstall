@@ -200,13 +200,13 @@ async def _run_download(
             speed_value.value = 0
             
             # Trigger Jellyfin library rescan instead of full restart
-            import requests
             from backend.app.config import JELLYFIN_URL, JELLYFIN_API_KEY
             if JELLYFIN_URL and JELLYFIN_API_KEY:
                 try:
                     refresh_url = f"{JELLYFIN_URL}/Library/Refresh"
                     headers = {"X-Emby-Token": JELLYFIN_API_KEY}
-                    requests.post(refresh_url, headers=headers, timeout=10)
+                    async with session.post(refresh_url, headers=headers, timeout=10) as refresh_resp:
+                        pass
                 except Exception as e:
                     print(f"Failed to refresh Jellyfin library: {e}")
         else:
