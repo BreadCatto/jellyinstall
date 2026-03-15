@@ -85,8 +85,8 @@ async def start_download(
     await db.commit()
     await db.refresh(record)
 
-    # Start download process (runs in thread pool to avoid blocking the event loop)
-    await download_manager.start_download(
+    # Start download process
+    download_manager.start_download(
         download_id=record.id,
         url=req.url,
         filepath=filepath,
@@ -105,7 +105,7 @@ async def cancel_download(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    success = await download_manager.cancel_download(download_id)
+    success = download_manager.cancel_download(download_id)
     if not success:
         raise HTTPException(status_code=404, detail="Download not found or already finished")
 

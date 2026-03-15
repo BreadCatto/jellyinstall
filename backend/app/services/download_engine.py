@@ -11,18 +11,17 @@ import sys
 import time
 import multiprocessing
 import traceback
-import functools
 from ctypes import c_double, c_longlong, c_int
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict
 
-# Use 'forkserver' on Linux/Mac to avoid fork-in-thread deadlocks when
-# process.start() is called from inside the asyncio event loop or a thread
-# pool executor.  'forkserver' spawns a dedicated helper process that does
-# the actual fork, so the uvicorn worker thread is never blocked waiting for
-# a fork() syscall to complete.
-# On Windows 'forkserver' is not available; fall back to 'spawn'.
+# Use 'forkserver' on Linux/Mac so the download subprocess is launched by a
+# dedicated helper process rather than forked directly from the uvicorn
+# worker.  Plain fork() from a multithreaded process inherits locks held by
+# other threads and can deadlock, freezing the event loop until the child
+# eventually exits.  'forkserver' sidesteps this entirely.
+# Windows doesn't support forkserver; 'spawn' is already the default there.
 _MP_CTX_NAME = "forkserver" if sys.platform != "win32" else "spawn"
 _ctx = multiprocessing.get_context(_MP_CTX_NAME)
 Process = _ctx.Process
@@ -47,10 +46,6 @@ class DownloadTask:
 
 
 NUM_CONNECTIONS = 20
-CHUNK_READ_SIZE = 1024 * 1024       # 1 MB per iter_chunked read (was 64 KB)
-LOCK_UPDATE_INTERVAL = 256 * 1024   # update shared counter every 256 KB accumulated
-                                    # fine-grained enough for smooth speed display at
-                                    # 100+ MB/s while still batching ~4 reads per lock
 
 
 def _format_speed(bps: float) -> str:
@@ -69,17 +64,10 @@ async def _download_chunk(
     end: int,
     downloaded_value,
     cancel_event,
-    chunk_size: int = CHUNK_READ_SIZE,
+    chunk_size: int = 1024 * 64,
     max_retries: int = 5,
 ):
-    """Download a single byte-range chunk with range headers.
-
-    Optimisations vs the naive version:
-    - 1 MB read buffer instead of 64 KB  → far fewer asyncio await/yield cycles
-    - File opened once per attempt (not per-chunk-iteration)
-    - Shared-memory lock acquired in batches every LOCK_UPDATE_INTERVAL bytes
-      instead of on every single read → eliminates cross-process lock contention
-    """
+    """Download a single chunk with range headers."""
     current_pos = start
     for attempt in range(max_retries):
         if cancel_event.is_set():
@@ -92,30 +80,15 @@ async def _download_chunk(
                         await asyncio.sleep(2 ** attempt)
                         continue
                     return
-                # Open once per attempt; seek to current resume position
                 with open(filepath, "r+b") as f:
                     f.seek(current_pos)
-                    local_accum = 0  # bytes accumulated since last lock update
                     async for data in resp.content.iter_chunked(chunk_size):
                         if cancel_event.is_set():
-                            # Flush remaining accumulation before bailing out
-                            if local_accum:
-                                with downloaded_value.get_lock():
-                                    downloaded_value.value += local_accum
                             return
                         f.write(data)
-                        n = len(data)
-                        current_pos += n
-                        local_accum += n
-                        # Only hit the cross-process lock every LOCK_UPDATE_INTERVAL
-                        if local_accum >= LOCK_UPDATE_INTERVAL:
-                            with downloaded_value.get_lock():
-                                downloaded_value.value += local_accum
-                            local_accum = 0
-                    # Flush any remaining bytes after the loop
-                    if local_accum:
+                        current_pos += len(data)
                         with downloaded_value.get_lock():
-                            downloaded_value.value += local_accum
+                            downloaded_value.value += len(data)
                 return
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
             if attempt < max_retries - 1:
@@ -134,24 +107,10 @@ async def _run_download(
     num_connections: int = NUM_CONNECTIONS,
 ):
     """Main download coroutine running inside the child process."""
-    connector = aiohttp.TCPConnector(limit=num_connections + 10, force_close=False)
+    connector = aiohttp.TCPConnector(limit=num_connections + 5, force_close=False)
     timeout = aiohttp.ClientTimeout(total=None, connect=30)
 
-    # Mimic a real browser so CDN/debrid servers don't fingerprint us as a
-    # bot and apply their default ~10 MB/s rate-limit tier.
-    default_headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "identity",   # disable gzip so Content-Length is exact
-        "Connection": "keep-alive",
-    }
-
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=default_headers) as session:
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         # Get file size with HEAD request
         try:
             async with session.head(url, allow_redirects=True) as resp:
@@ -226,25 +185,14 @@ async def _run_download(
             try:
                 async with session.get(url, allow_redirects=True) as resp:
                     with open(filepath, "wb") as f:
-                        local_accum = 0
-                        async for data in resp.content.iter_chunked(CHUNK_READ_SIZE):
+                        async for data in resp.content.iter_chunked(64 * 1024):
                             if cancel_event.is_set():
-                                if local_accum:
-                                    with downloaded_value.get_lock():
-                                        downloaded_value.value += local_accum
                                 break
                             f.write(data)
-                            n = len(data)
-                            local_accum += n
-                            if local_accum >= LOCK_UPDATE_INTERVAL:
-                                with downloaded_value.get_lock():
-                                    downloaded_value.value += local_accum
-                                local_accum = 0
+                            with downloaded_value.get_lock():
+                                downloaded_value.value += len(data)
                             if content_length == 0:
                                 total_size_value.value = downloaded_value.value
-                        if local_accum:
-                            with downloaded_value.get_lock():
-                                downloaded_value.value += local_accum
             except Exception:
                 if not cancel_event.is_set():
                     status_value.value = 3  # failed
@@ -262,8 +210,8 @@ async def _run_download(
         elif downloaded_value.value >= total_size_value.value * 0.99 if total_size_value.value > 0 else True:
             status_value.value = 2  # completed
             speed_value.value = 0
-            
-            # Trigger Jellyfin library rescan instead of full restart
+
+            # Trigger Jellyfin library rescan
             from backend.app.config import JELLYFIN_URL, JELLYFIN_API_KEY
             if JELLYFIN_URL and JELLYFIN_API_KEY:
                 try:
@@ -301,7 +249,7 @@ class DownloadManager:
         self.tasks: Dict[int, DownloadTask] = {}
         self._next_id = 1
 
-    def _start_download_sync(
+    def start_download(
         self,
         download_id: int,
         url: str,
@@ -311,7 +259,6 @@ class DownloadManager:
         media_type: str = "movie",
         quality: str = "",
     ) -> DownloadTask:
-        """Synchronous process spawn -- called from a thread pool."""
         total_size = Value(c_longlong, 0)
         downloaded = Value(c_longlong, 0)
         speed = Value(c_double, 0.0)
@@ -343,36 +290,7 @@ class DownloadManager:
         process.start()
         return task
 
-    async def start_download(
-        self,
-        download_id: int,
-        url: str,
-        filepath: str,
-        title: str,
-        filename: str,
-        media_type: str = "movie",
-        quality: str = "",
-    ) -> DownloadTask:
-        """Non-blocking download start. Spawns the process in a thread pool
-        so the asyncio event loop is never blocked."""
-        loop = asyncio.get_running_loop()
-        task = await loop.run_in_executor(
-            None,
-            functools.partial(
-                self._start_download_sync,
-                download_id=download_id,
-                url=url,
-                filepath=filepath,
-                title=title,
-                filename=filename,
-                media_type=media_type,
-                quality=quality,
-            ),
-        )
-        return task
-
-    def _cancel_download_sync(self, download_id: int) -> bool:
-        """Synchronous cancel -- called from a thread pool."""
+    def cancel_download(self, download_id: int) -> bool:
         task = self.tasks.get(download_id)
         if task is None:
             return False
@@ -381,11 +299,6 @@ class DownloadManager:
         if task.process.is_alive():
             task.process.terminate()
         return True
-
-    async def cancel_download(self, download_id: int) -> bool:
-        """Non-blocking cancel. Runs join/terminate in a thread pool."""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._cancel_download_sync, download_id)
 
     def get_task_info(self, task: DownloadTask) -> dict:
         status_map = {0: "pending", 1: "downloading", 2: "completed", 3: "failed", 4: "cancelled"}
@@ -412,14 +325,12 @@ class DownloadManager:
 
     def get_all_active(self) -> list:
         results = []
-        finished_ids = []
         for did, task in self.tasks.items():
             info = self.get_task_info(task)
             results.append(info)
             if info["status"] in ("completed", "failed", "cancelled"):
                 if not task.process.is_alive():
-                    finished_ids.append(did)
-        # Clean up finished processes (but keep info accessible)
+                    pass  # keep in list for UI; cleanup_finished handles removal
         return results
 
     def cleanup_finished(self):
@@ -430,8 +341,8 @@ class DownloadManager:
         for did in to_remove:
             del self.tasks[did]
 
-    def _kill_all_sync(self):
-        """Synchronous kill all -- called from a thread pool."""
+    def kill_all(self):
+        """Kill all active download processes. Called on shutdown."""
         for task in self.tasks.values():
             task.cancel_event.set()
             if task.process.is_alive():
@@ -441,11 +352,6 @@ class DownloadManager:
             if task.process.is_alive():
                 task.process.kill()
         self.tasks.clear()
-
-    async def kill_all(self):
-        """Non-blocking kill all. Runs in a thread pool."""
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._kill_all_sync)
 
 
 # Singleton
