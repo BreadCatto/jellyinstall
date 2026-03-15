@@ -9,6 +9,7 @@ import aiohttp
 import os
 import time
 import multiprocessing
+import traceback
 from multiprocessing import Process, Value, Event
 from ctypes import c_double, c_longlong, c_int
 from pathlib import Path
@@ -206,8 +207,8 @@ async def _run_download(
                     refresh_url = f"{JELLYFIN_URL}/Library/Refresh"
                     headers = {"X-MediaBrowser-Token": JELLYFIN_API_KEY}
                     requests.post(refresh_url, headers=headers, timeout=10)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Failed to refresh Jellyfin library: {e}")
         else:
             status_value.value = 3  # failed
 
@@ -223,7 +224,9 @@ def _process_entry(url, filepath, total_size, downloaded, speed, status, cancel_
             _run_download(url, filepath, total_size, downloaded, speed, status, cancel_event, num_connections)
         )
         loop.close()
-    except Exception:
+    except Exception as e:
+        print(f"Download process failed with exception: {e}")
+        traceback.print_exc()
         status.value = 3  # failed
 
 
