@@ -18,6 +18,9 @@ TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
 
+JELLYFIN_URL = os.environ.get("JELLYFIN_URL", "").rstrip("/")
+JELLYFIN_API_KEY = os.environ.get("JELLYFIN_API_KEY", "")
+
 WEBSTREAMR_BASE_URL = "https://webstreamr.hayd.uk/stream"
 
 JWT_SECRET = os.environ.get("JWT_SECRET", secrets.token_hex(32))

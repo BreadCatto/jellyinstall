@@ -198,12 +198,16 @@ async def _run_download(
             status_value.value = 2  # completed
             speed_value.value = 0
             
-            # Restart jellyfin when a download completes
-            import subprocess
-            try:
-                subprocess.run(["sudo", "systemctl", "restart", "jellyfin"], check=False)
-            except Exception:
-                pass
+            # Trigger Jellyfin library rescan instead of full restart
+            import requests
+            from backend.app.config import JELLYFIN_URL, JELLYFIN_API_KEY
+            if JELLYFIN_URL and JELLYFIN_API_KEY:
+                try:
+                    refresh_url = f"{JELLYFIN_URL}/Library/Refresh"
+                    headers = {"X-MediaBrowser-Token": JELLYFIN_API_KEY}
+                    requests.post(refresh_url, headers=headers, timeout=10)
+                except Exception:
+                    pass
         else:
             status_value.value = 3  # failed
 

@@ -160,6 +160,13 @@ echo
 ask TMDB_API_KEY "TMDB API Key" ""
 ask TMDB_ACCESS_TOKEN "TMDB Read Access Token" ""
 
+echo
+echo -e "${BOLD}-- Jellyfin Integration --${RESET}"
+echo
+
+ask JELLYFIN_URL "Jellyfin URL (e.g. http://localhost:8096)" ""
+ask JELLYFIN_API_KEY "Jellyfin API Key (optional, for auto-refresh)" ""
+
 # JWT secret
 JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 info "Generated JWT secret (stored in config)."
@@ -246,6 +253,8 @@ MOVIE_DIR=${MOVIE_DIR}
 SHOW_DIR=${SHOW_DIR}
 TMDB_API_KEY=${TMDB_API_KEY}
 TMDB_ACCESS_TOKEN=${TMDB_ACCESS_TOKEN}
+JELLYFIN_URL=${JELLYFIN_URL}
+JELLYFIN_API_KEY=${JELLYFIN_API_KEY}
 EOF
 chmod 640 "$ENV_FILE"
 chown root:"$SERVICE_USER" "$ENV_FILE" 2>/dev/null || true
