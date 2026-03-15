@@ -197,6 +197,13 @@ async def _run_download(
         elif downloaded_value.value >= total_size_value.value * 0.99 if total_size_value.value > 0 else True:
             status_value.value = 2  # completed
             speed_value.value = 0
+            
+            # Restart jellyfin when a download completes
+            import subprocess
+            try:
+                subprocess.run(["sudo", "systemctl", "restart", "jellyfin"], check=False)
+            except Exception:
+                pass
         else:
             status_value.value = 3  # failed
 

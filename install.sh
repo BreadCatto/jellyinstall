@@ -301,7 +301,7 @@ cd "$INSTALL_DIR"
 set -a; source "$ENV_FILE"; set +a
 sudo -u "$SERVICE_USER" env PORT="$PORT" JWT_SECRET="$JWT_SECRET" MOVIE_DIR="$MOVIE_DIR" SHOW_DIR="$SHOW_DIR" \
     "${VENV_DIR}/bin/python" -m backend.app.manage create-user \
-    --username "$ADMIN_USER" --password "$ADMIN_PASS" --admin
+    --username "$ADMIN_USER" --password "$ADMIN_PASS"
 success "Admin user created."
 
 # ---------------------------------------------------------------------------

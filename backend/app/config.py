@@ -22,6 +22,6 @@ WEBSTREAMR_BASE_URL = "https://webstreamr.hayd.uk/stream"
 
 JWT_SECRET = os.environ.get("JWT_SECRET", secrets.token_hex(32))
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = 72
+JWT_EXPIRY_HOURS = 87600  # 10 years (effectively forever)
 
 SERVER_PORT = int(os.environ.get("PORT", 8097))
