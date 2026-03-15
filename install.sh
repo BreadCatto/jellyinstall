@@ -153,6 +153,13 @@ ask MOVIE_DIR "Movie download directory" "/mnt/media/Movies"
 # Show download directory
 ask SHOW_DIR "TV show download directory" "/mnt/media/Shows"
 
+echo
+echo -e "${BOLD}-- External APIs --${RESET}"
+echo
+
+ask TMDB_API_KEY "TMDB API Key" ""
+ask TMDB_ACCESS_TOKEN "TMDB Read Access Token" ""
+
 # JWT secret
 JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 info "Generated JWT secret (stored in config)."
@@ -237,6 +244,8 @@ PORT=${PORT}
 JWT_SECRET=${JWT_SECRET}
 MOVIE_DIR=${MOVIE_DIR}
 SHOW_DIR=${SHOW_DIR}
+TMDB_API_KEY=${TMDB_API_KEY}
+TMDB_ACCESS_TOKEN=${TMDB_ACCESS_TOKEN}
 EOF
 chmod 640 "$ENV_FILE"
 chown root:"$SERVICE_USER" "$ENV_FILE" 2>/dev/null || true
