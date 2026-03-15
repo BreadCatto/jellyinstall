@@ -35,6 +35,8 @@ class DownloadTask:
 
 
 NUM_CONNECTIONS = 20
+CHUNK_READ_SIZE = 1024 * 1024       # 1 MB per iter_chunked read (was 64 KB)
+LOCK_UPDATE_INTERVAL = 4 * 1024 * 1024  # update shared counter every 4 MB accumulated
 
 
 def _format_speed(bps: float) -> str:
@@ -53,10 +55,17 @@ async def _download_chunk(
     end: int,
     downloaded_value,
     cancel_event,
-    chunk_size: int = 1024 * 64,
+    chunk_size: int = CHUNK_READ_SIZE,
     max_retries: int = 5,
 ):
-    """Download a single chunk with range headers."""
+    """Download a single byte-range chunk with range headers.
+
+    Optimisations vs the naive version:
+    - 1 MB read buffer instead of 64 KB  → far fewer asyncio await/yield cycles
+    - File opened once per attempt (not per-chunk-iteration)
+    - Shared-memory lock acquired in batches every LOCK_UPDATE_INTERVAL bytes
+      instead of on every single read → eliminates cross-process lock contention
+    """
     current_pos = start
     for attempt in range(max_retries):
         if cancel_event.is_set():
@@ -69,15 +78,30 @@ async def _download_chunk(
                         await asyncio.sleep(2 ** attempt)
                         continue
                     return
+                # Open once per attempt; seek to current resume position
                 with open(filepath, "r+b") as f:
                     f.seek(current_pos)
+                    local_accum = 0  # bytes accumulated since last lock update
                     async for data in resp.content.iter_chunked(chunk_size):
                         if cancel_event.is_set():
+                            # Flush remaining accumulation before bailing out
+                            if local_accum:
+                                with downloaded_value.get_lock():
+                                    downloaded_value.value += local_accum
                             return
                         f.write(data)
-                        current_pos += len(data)
+                        n = len(data)
+                        current_pos += n
+                        local_accum += n
+                        # Only hit the cross-process lock every LOCK_UPDATE_INTERVAL
+                        if local_accum >= LOCK_UPDATE_INTERVAL:
+                            with downloaded_value.get_lock():
+                                downloaded_value.value += local_accum
+                            local_accum = 0
+                    # Flush any remaining bytes after the loop
+                    if local_accum:
                         with downloaded_value.get_lock():
-                            downloaded_value.value += len(data)
+                            downloaded_value.value += local_accum
                 return
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
             if attempt < max_retries - 1:
@@ -96,7 +120,7 @@ async def _run_download(
     num_connections: int = NUM_CONNECTIONS,
 ):
     """Main download coroutine running inside the child process."""
-    connector = aiohttp.TCPConnector(limit=num_connections + 5, force_close=False)
+    connector = aiohttp.TCPConnector(limit=num_connections + 10, force_close=False)
     timeout = aiohttp.ClientTimeout(total=None, connect=30)
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
@@ -174,14 +198,25 @@ async def _run_download(
             try:
                 async with session.get(url, allow_redirects=True) as resp:
                     with open(filepath, "wb") as f:
-                        async for data in resp.content.iter_chunked(64 * 1024):
+                        local_accum = 0
+                        async for data in resp.content.iter_chunked(CHUNK_READ_SIZE):
                             if cancel_event.is_set():
+                                if local_accum:
+                                    with downloaded_value.get_lock():
+                                        downloaded_value.value += local_accum
                                 break
                             f.write(data)
-                            with downloaded_value.get_lock():
-                                downloaded_value.value += len(data)
+                            n = len(data)
+                            local_accum += n
+                            if local_accum >= LOCK_UPDATE_INTERVAL:
+                                with downloaded_value.get_lock():
+                                    downloaded_value.value += local_accum
+                                local_accum = 0
                             if content_length == 0:
                                 total_size_value.value = downloaded_value.value
+                        if local_accum:
+                            with downloaded_value.get_lock():
+                                downloaded_value.value += local_accum
             except Exception:
                 if not cancel_event.is_set():
                     status_value.value = 3  # failed
