@@ -205,7 +205,7 @@ async def _run_download(
             if JELLYFIN_URL and JELLYFIN_API_KEY:
                 try:
                     refresh_url = f"{JELLYFIN_URL}/Library/Refresh"
-                    headers = {"X-MediaBrowser-Token": JELLYFIN_API_KEY}
+                    headers = {"X-Emby-Token": JELLYFIN_API_KEY}
                     requests.post(refresh_url, headers=headers, timeout=10)
                 except Exception as e:
                     print(f"Failed to refresh Jellyfin library: {e}")
